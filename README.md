@@ -7,7 +7,9 @@
 
 ## Features
 ✅ **Basic text search** (like `grep`)
+
 ✅ **Fast file reading** (thanks to Rust!)
+
 ✅ **Easy to extend** (add regex, colors, etc.)
 
 ## Installation

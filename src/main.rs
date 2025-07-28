@@ -1,69 +1,97 @@
 use clap::Parser;
-use std::fs::File;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::Path;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+use walkdir::WalkDir;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// The pattern to search for
     #[arg(short, long)]
-    pattern: String, 
+    pattern: String,
 
     /// The file to search in
     #[arg(short, long)]
-    file: String,
+    file: Option<String>,
 
-    /// Case sensitive search
+    /// The folder to search in
+    #[arg(short = 'd', long)]
+    folder: Option<String>,
+
+    /// Case insensitive search
     #[arg(short, long, action = clap::ArgAction::SetTrue)]
     insensitive: bool,
 }
 
-fn main() -> io::Result<()> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
     let args = Args::parse();
-    let file_path = Path::new(&args.file);
-    let file = File::open(&file_path)?;
-    let reader = io::BufReader::new(file);
     let mut stdout = StandardStream::stdout(ColorChoice::Always);
 
-    for (line_number, line) in reader.lines().enumerate() {
-        let line = line?;
-        let line_contains_pattern = if args.insensitive {
-            line.to_lowercase().contains(&args.pattern.to_lowercase())
-        } else {
-            line.contains(&args.pattern)
-        };
-
-        if line_contains_pattern {
-            stdout.set_color(ColorSpec::new().set_fg(Some(Color::Magenta)))?;
-            write!(&mut stdout, "{}", line_number + 1)?;
-            stdout.reset()?;
-            write!(&mut stdout, ": ")?;
-
-            let pattern = if args.insensitive {
-                args.pattern.to_lowercase()
-            } else {
-                args.pattern.clone()
-            };
-            let lower_line = line.to_lowercase();
-
-            let mut start = 0;
-            let mut line_with_highlights = String::new();
-            while let Some(idx) = lower_line[start..].find(&pattern) {
-                let idx = idx + start;
-                line_with_highlights.push_str(&line[start..idx]);
-                line_with_highlights.push_str("\x1b[31m"); // Red color for the pattern
-                line_with_highlights.push_str(&line[idx..idx + args.pattern.len()]);
-                line_with_highlights.push_str("\x1b[0m"); // Reset color
-                start = idx + args.pattern.len();
-            }
-            line_with_highlights.push_str(&line[start..]);
-
-            writeln!(&mut stdout, "{}", line_with_highlights)?;
-        }
+    if let Some(file) = args.file {
+        search_in_file(Path::new(&file), &args.pattern, args.insensitive, &mut stdout)?;
+    } else {
+        let folder = args.folder.as_deref().unwrap_or(".");
+        search_in_folder(folder, &args.pattern, args.insensitive, &mut stdout)?;
     }
 
     Ok(())
-        //Simple another 'Main" wor'
 }
+
+fn search_in_file(file: &Path, pattern: &str, insensitive: bool, stdout: &mut StandardStream) -> io::Result<()> {
+    let file_contents = match std::fs::read_to_string(file) {
+        Ok(contents) => contents,
+        Err(e) => {
+            eprintln!("Error reading file {}: {}", file.display(), e);
+            return Ok(());
+        }
+    };
+
+    let pattern = if insensitive { pattern.to_lowercase() } else { pattern.to_string() };
+
+    for (line_number, line) in file_contents.lines().enumerate() {
+        let line_lower = if insensitive { line.to_lowercase() } else { line.to_string() };
+
+        if line_lower.contains(&pattern) {
+            stdout.set_color(ColorSpec::new().set_fg(Some(Color::Magenta)))?;
+            write!(stdout, "{}", file.display())?;
+            stdout.reset()?;
+            writeln!(stdout, ":{}", line_number + 1)?;
+
+            let mut start = 0;
+            let mut line_with_highlights = String::new();
+            while let Some(idx) = line_lower[start..].find(&pattern) {
+                let idx = idx + start;
+                line_with_highlights.push_str(&line[start..idx]);
+                line_with_highlights.push_str("\x1b[31m");
+                line_with_highlights.push_str(&line[idx..idx + pattern.len()]);
+                line_with_highlights.push_str("\x1b[0m");
+                start = idx + pattern.len();
+            }
+            line_with_highlights.push_str(&line[start..]);
+
+            if let Err(e) = writeln!(stdout, "{}", line_with_highlights){
+                eprintln!("Error while writing to stdout: {}", e);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn search_in_folder(folder: &str, pattern: &str, insensitive: bool, stdout: &mut StandardStream) -> io::Result<()> {
+    for entry in WalkDir::new(folder) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            search_in_file(entry.path(), pattern, insensitive, stdout)?;
+        }
+    }
+    Ok(())
+}
+
